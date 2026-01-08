@@ -1,0 +1,107 @@
+Usage Considerations
+This is only used in End User Computing (EUC) Application Team for enforcing governance on SharePoint/ OneDrive for Buseinss SaaS applications which required large data stream to be captured and stored in relational data format, and as volume is very high so can't be stored in any other format like CSV.
+Networking
+Private endpoint support for secure connectivity
+Virtual Network (VNet) integration with subnet isolation
+Configurable firewall rules and network security groups
+Support for VPN and ExpressRoute connectivity
+Public traffic flows are denied by default. The default Network Security Group (NSG) is applied to subnets with a default "deny" rule.
+Custom NSGs and RouteTables can be associated with subnets as needed, based on application-specific traffic flow requirements.
+Connectivity
+Managed Instance can connect to or from : Azure App Service, Azure Functions, Logic Apps, etc., via private endpoints or VNet integration. Azure Storage for backups and restores.
+Managed Instance runs inside an Azure Virtual Network (VNet), It is not a public endpoint service; all traffic is private. Requires subnet delegation for Microsoft.Sql/managedInstances. Communication happens over private IP addresses
+Hybrid Solution
+N/A
+Load balancing
+Azure SQL Managed Instance does not use traditional load balancers like Azure Load Balancer or Application Gateway because: It is a stateful database service running inside a dedicated subnet in an Azure VNet. Connectivity is handled through private IP addresses and built-in high availability, not through external load balancing.
+Service Discovery
+Managed Instance provides a fully qualified domain name (FQDN), like instance-name.zone.database.windows.net
+Applications resolve this via Private DNS Zone linked to the VNet.
+Integration points with other Services/Components
+Azure Key Vault for secrets and encryption key management
+Azure Monitor and Log Analytics for monitoring
+App Services, Functions, and Logic Apps for application integration
+High Availability and Disaster Recovery
+Azure SQL Managed Instance provides built-in high availability and disaster recovery capabilities to ensure business continuity.
+In the General Purpose tier, high availability is achieved through remote Azure Premium Storage with automatic failover within the same region.
+The Business Critical tier uses Always On Availability Groups with multiple synchronous replicas, including a free read-only replica for reporting, enabling fast failover in seconds.
+For disaster recovery across regions, Managed Instance supports auto-failover groups and geo-replication, allowing asynchronous replication to a secondary instance in another Azure region.
+Automated backups stored in geo-redundant storage further enhance resilience, enabling point-in-time restores anywhere.
+Above features collectively deliver low RPO and RTO, ensuring minimal downtime and data loss during failures or regional outages.
+High Availability (HA)
+Built-in high availability with automatic failover
+Zone-redundant deployments for critical workloads
+Geo-replication for disaster recovery scenarios
+Automated and manual failover options
+Disaster Recovery (DR)
+Disaster recovery is achieved through two primary methods:
+Failover Groups: This is the recommended strategy for high availability. It provides continuous asynchronous synchronization between a primary and secondary instance in different regions. It includes a listener endpoint that remains unchanged, removing the need to update application connection strings after a failover.
+Geo-Restore: A last-resort option that uses geo-replicated backups to restore a database to a different region if the primary region is inaccessible. This typically has a higher Recovery Time Objective (RTO) of up to 12 hours and a Recovery Point Objective (RPO) of roughly one hour.
+Backup and Recovery
+Backup
+
+Azure SQL Managed Instance performs automated backups for all databases with no required manual setup.
+Backup Types: Includes weekly full backups, differential backups every 12–24 hours, and transaction log backups every 5–10 minutes.
+Retention : ?
+Storage Redundancy : ?
+Recovery Scenario
+
+Point-in-Time Restore (PITR) :
+Regional Failover (using Failover Groups) :
+Restore from Deleted Instance :
+Scalability
+Vertical scaling: Adjust compute and storage resources without downtime
+Horizontal scaling: Instance pools for multiple managed instances
+Performance tuning and automatic index management
+Deployment/SDLC
+All components in context diagram are available in: - Cloud Native environments
+All components in context diagram can be deployed using: - Terraform, Powershell
+Patching/Upgrade Strategy
+Automated patching managed by Azure with minimal downtime
+Monitoring/Logging
+Azure Monitor integration for performance and health metrics
+Log Analytics for query performance and diagnostics
+Alerts for critical events (CPU, storage, connectivity)
+Audit logs for compliance and security monitoring
+Known bad configuration options
+Not applicable.
+Security
+Security main chapter, keep this section empty as the below subsections cover this section.
+Role-based access control (RBAC) and Azure AD authentication
+Network security: Private endpoints and NSGs
+Transparent Data Encryption (TDE) and Always Encrypted
+Managed identities for secure resource access
+Least privilege principles for privileged access
+Privileged Access Management (PAM)
+Control Plane's privileged roles are configured for DB’s PAM solution based on CyberArk. This enables appropriate privileged access approvals and session recording.
+
+PIM or CyberArk will be used for console activities in Azure Cloud Services.
+Access to the data will be via PAM and if any manual changes to the Storage account would be done by PIM or CyberArk.
+IAM Security Control ?
+Access to Azure SQL Managed Instance & Storage Account APIs for the management of the Blob containers & Storage account should be done only through service accounts.
+Entra ID authentication should be used for Blob Storage access
+Network Security Control
+Traffic for Azure SQL Managed Instance should be routed privately over the Microsoft backbone using Private Endpoints only.
+Exceptions to the above are reviewed on a case-by-case basis by Firewall Governance.
+Deployment Security Control
+Deployent as per CSO Azure SQL Managed Instance Controls List
+Secure Data Management and Encryption
+Connections to the database engine itself for data queries and transactions use TDS encapsulated within TLS 1.2 or higher, providing robust encryption for all data in transit,
+Azure SQL Managed Instance should use dbKeyProtect CMEKs for data encryption at rest.
+Containers and Virtual Machine Security
+N/A
+Logging and Monitoring
+Microsoft Defender classic plan for storage is enabled by default for all azure subscription with security alerts being send to Microsoft sentinel.
+Data Governance ?
+Data Retention can be configured by the application team, depending on their application's requirements.
+For Azure SQL Managed Instance data that hold business critical, or sensitive information, that must be retained and not modified, enable immutable storage option, more details found here
+Cyber Hygiene
+Terraform template for Azure SQL Managed Instance is maintained in central repository for consumption.
+Guardrails compliment template and prevent misconfigurations. Misconfigurations found on existing Azure SQL Managed Instance are managed by standard Cyber Hygiene process.
+Cost Optimisation
+The user must focus on cost optimization by selecting the most suitable storage configuration based on their workload requirements and pricing considerations. Choosing the right storage option ensures a balance between performance, availability, and cost efficiency while meeting business needs.
+Usually recommend to use General Purpose Tier.
+6. Technical Guardrails
+For a detailed description of Azure Guardrails, please refer to Azure Gaurdrails
+7. Lifecycle Status
+Refer F-ADR dbCatalog
