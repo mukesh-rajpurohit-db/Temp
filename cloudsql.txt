@@ -1,0 +1,450 @@
+Cloud SQL Enterprise provides all core capabilities of Cloud SQL and is suitable for applications requiring a balance of performance, availability, and cost.
+Cloud SQL Enterprise Plus provides the best performance and availability to run applications requiring the highest level of availability and performance in addition to the capabilities of the Cloud SQL Enterprise edition
+
+Core functionality of applications will be identical when comapring the 2 editions so from a cost-perspective, only choose Enteprise Plus edition when performance and/or non-functional requirements demand it.
+
+For a more in-depth assessment see "Cloud SQL Enteprise Plus Edition"
+
+Other Optionality
+As mentioned earlier the only real option within the Cloud SQL MSSQL service exists in the design of HA/DR and read-replicas. This is discussed in more detail in a later section.
+
+Each application does need to consider whether they can SHARE resources within an instance separating data in either separate databases or separate schemas within databases.
+
+From an application perspective, apart from choosing the version of MSSQL, the non-functional options to choose with pros (+) and cons (-) are :
+
+Multiple Instances, 1 database in each instance
+
+Only consider using multiple instances if you want complete isolation of resources (CPU/RAM) from each application.
+[-] Charging is per instance, NOT per database or schema.
+Critical applications that cannot tolerate "noisy neighbours" should consider this option.
+[+] Separation of costs on a per application basis
+[+] Cloud SQL daily automatic backup and recovery is at INSTANCE level
+Single Instance, multiple databases
+
+Typically each application will be connecting to a specific database.
+
+[-] Resource (network / CPU / memory / IO ) are shared at INSTANCE level - one noisy neighbour in a database or schema affects the performance of ALL database/schema owners. Can be mitigated by re-sizing the CPU/memory regularily
+
+[-] Charging (at google level) does not go down to database and/or schema level so no automatic way of sharing costs - but plenty of other ways to show who's using most space and auditing of sessions to show which apps/schemas/databases were the heavy hitters using tools such as Activity Monitor and Query Store .
+
+[+] Cheaper than using multiple instances.
+
+[-] Cloud SQL daily automatic backup is at INSTANCE level and so a restore affects ALL databases, not just one.
+
+[+] Can "gcloud sql export" to backup/export data and schema in MSSQL Native format at a database level
+
+[+] Can use BCP to export/import data at a table level.
+
+[+] Can create/modify/delete databases at Cloud SQL Control plane level (ie gcloud commands / console / LZ terraform)
+
+Overall Context Diagram
+Cloud SQL Context Diagram
+
+Usage Considerations
+Networking
+A designated range of IP addresses will be made available up front by networks and placed into a subnet within the shared VPC. This subnet is then used for the automatic creation of a SQL instance.
+
+These IP ranges will be multiple, regional, /24, prefixed CIDR ranges for Cloud SQL, and not contiguous. A cloud sql endpoint is provided which is part of the host Landing Zone's VPC.
+
+Some network parameters are required to be entered into the Cloud SQL PMR terraform code:
+
+private_network="name of allocated VPC network"
+allocated_ip_range="name of ip range provided by networks"
+
+The "private_network" is the shared VPC allocated to the project when Landing Zones are 1st created.
+The "allocated_ip_range" can be obtained from Shared GCP Networks
+NB The range is finite and so networks periodically need to create new subnets for cloud sql in a region. e.g. DEV in europe-west3 region is (Mar-23) on its 3rd subnet - each with a different value for "allocated_ip_range".
+
+Connectivity
+There are 2 layers to the Cloud SQL service.
+
+Cloud SQL Control Plane
+MSSQL database instance
+Using gcloud commands / Google API / Terraform one can work at the control plane level. Primarily this is for provisioning and checking infrastructure and requires IAM roles/permissions to perform certain tasks. Through the terraform PMR module one can perform all necessary infrastructure creation/modification ie.
+
+creating/modifying/deleting cloud sql MSSQL instances
+creating/modifying/deleting cloud sql MSSQL databases
+creating/modifying/deleting cloud sql MSSQL database users
+Connectivity to the control plane requires a valid IAM account with specific cloudsql roles bound to the IAM account within the project hosting the Cloud SQL instance. As part of the LZ SDLC process, all necessary roles/permissions for the above actions through the PMR module are performed from within the special secret accounts running through the pre-defined github workflows. Basic roles to be able to monitor/list instances (e.g. though the Google cloud console or using gcloud commands) are roles/cloudsql.viewer or the custom role "customcloudsqlinfo" ("organizations/595994669073/roles/customcloudsqlinfo")
+
+Connectivity to the MSSQL instance requires the following IAM roles:
+
+roles/cloudsql.client
+roles/cloudsql.instanceViewer
+All the IAM roles can be provided through the IAM plugin.
+
+Connectivity to the MSSQL instance itself requires not only IAM roles but an additional component - the Cloud SQL Auth Proxy.
+
+Cloud SQL Auth Proxy
+Google have provided the Cloud SQL Auth Proxy - a lightweight application component which runs separately to the application itself but should be local to the container or host running the application. This is the recommended solution for applications that run in the cloud providing secure access to the MSSQL database using TLS1.2 & above and SSL certificates whilst providing standard connectivity for your applications. The need for local management of client and root certificates is removed as the SQL Proxy handles all of this through OAUTH tokens (refreshed hourly automatically). The proxy handles authentication with Cloud SQL, removing the need to provide static IP addresses so easier connection management.
+
+Cloud SQL Auth Proxy
+
+Points to note when using the Cloud SQL Auth Proxy:
+
+To connect to a Cloud SQL instance using private IP, the proxy must be on a resource with access to the same VPC network as the instance (on-prem hosts/DODs have this access for example)
+
+Install the proxy on your client - it runs as an executable - on ANY port (you decide)
+
+Outgoing connections to the CloudSQL instance are on PORT 3307 - check firewall (e.g. egress firewall rule for port 3307 from GKE container running the proxy will be needed)
+
+You must provide the proxy with Google Cloud authentication credentials e.g.
+
+a user must run "gcloud auth login" before running the proxy
+
+an oauth token can be passed (gcloud auth print-access-token)
+
+service account credential file can be passed
+
+can use credential file pointed to by env "APPLICATION_DEFAULT_CREDENTIALS"
+Cloud SQL Connectors
+The Cloud SQL Auth Proxy is an executable provided by Google which makes use of Cloud SQL Connectors. Libraries exist for Java , Python and Go which perform the same functionality as the cloud sql auth proxy without the need to manage another separate process (e.g. can use a JDBC connector with standard MSSQL JDBC drivers.)
+
+Standard recommendations for connectivity to MSSQL still exist like using connection pooling.
+
+Cloud SQL Certificates for SSL access without Cloud SQL Auth Proxy
+Whilst GCP Cloud SQL does offer up a method of using a SSL enabled connection via client/root certificates, these are all generated by GCP. As such CSO determined that they should not be used.
+Google have commited to providing a solution using BYOK and whilst being on the roadmap, as of Apr-23, there is no guideline date yet.
+
+Hybrid Solution
+Whilst the database itself cannot be anything but hosted on GCP as a cloud native service, there are multiple ways that an application can interact with the database be it on on-prem or in the cloud. e.g. using GKE in the cloud as the database client, or Fabric on prem.
+
+Load balancing
+There are no load balancers out of the box provided by Cloud SQL.
+
+Service Discovery
+The main discovery tool for the Cloud SQL control plane is through one of the standard google apis sqladmin.googleapis.com The API is used for the usual Google management tools such as the Console, gcloud SDK and the terraform provider for Google.
+
+Integration points with other Services/Components
+Cloud SQL is another native GCP service with integration with a number of services : GCP IAM, GCP KMS. In addition, standard application hosting environments like GKE, GCE all make use of the connectivity options through native MSSQL libraries sitting on top of either CloudSQL connectors (python/java/go) or the Cloud SQL Auth proxy described in more detail above.
+
+Privileged Access Management (PAM)
+Access to Cloud SQL instances like all GCP services/API's is via IAM roles. Privileged Access is managed via the EPA plugin for EPA baselined Cloud SQL roles and will be via CyberArk for Production access. In addition a CyberArk module is being developed to control the use of SQL Native Logins. This is expected in Q2 2023.
+
+More details from CSO-PAM team available in ADR : GCP Interactive Database Access
+
+High Availability and Disaster Recovery
+High Availability (HA)
+See Google CloudSQL HA Documentation
+
+Cloud SQL High Availability is achieved in two ways :
+
+Synchronous HA Pair in 2 separate zones in same region (Regional)
+
+This satisfies requirements for RPO=0
+Does have support for Google’s Zone Separation offering
+Does not require any application action when a failover occurs other than re-connecting
+Asynchronous Read-replica in a separate region (Multi-region)
+
+Does not satisfy RPO=0
+Requires applications to "re-point" to the read-replica
+Requires manual intervention to re-construct application resilent infrastructure
+Read replicas do not have an HA pair
+Recommended setup:
+
+HA pair utilising zone separation in the same region.
+
+The CloudSQL PMR terraform module provides a parameter to configure HA in a region. To configure HA :
+
+enable_failover_replica = true
+
+See Cloud SQL PMR module
+
+CloudSQL HA
+
+Disaster Recovery (DR)
+See Google CloudSQL DR Documentation
+
+Geo-separated zones ARE available for the Cloud SQL service in certain regions. This means that the Full Active-Passive - CloudSQL HA-enabled setup of CloudSQL which provides synchronous replication between 2 zones in a region will give an application an RPO=0.
+
+Alternatively, Active-Active Distributed asynchronous replication between 2 zones in different regions is possible. The distributed copy is a read-only replica which can be used for read-only application users if required.
+
+CloudSQL DR1
+
+In the event that a complete region becomes unavailable, the read-replica can be promoted to a fully writeable CloudSQL instance:
+
+CloudSQL DR2
+
+Once this sort of failover is initiated, the fully resilient HA infrastructure and cross-region replicas will have to be rebuilt:
+
+CloudSQL DR3
+
+Backup and Recovery
+See Google CloudSQL Backup Documentation
+
+As part of the Cloud SQL service, a daily automatic encrypted backup is taken at the INSTANCE level.
+The default retention period is 7-days. Maximum retention period is 1 year.
+
+NB Database backup retention should not be conflated with Data Archiving strategy to meet Records Management policy. See dbCloudArchive - NAR 100101-1 for more details (replacement for dbWorm)
+By default, backups are stored in the multiregion that is geographically closest to the location of your Cloud SQL instance. e.g. europe-west3 Cloud SQL instance would store its backups in the "eu" multiregion. This means that in the event of a regional outage a backup of the failed instance could be restored to a new instance in a different region.
+In addition to standard instance based backups, transaction logs are backed up if "point-in-time-recovery" is enabled.
+
+The CloudSQL PMR terraform module provides multiple parameters to configure backups for an instance:
+
+backup_enabled = true
+backup_location = "eu"
+backup_start_time = "04:00"
+point-in-time-recovery-enabled = true
+retained_backups = 7
+
+See Cloud SQL PMR module
+
+Scalability
+Cloud SQL MSSQL can be thought of as a "scale-up" service. It does not support automatic scaling on load. However, it is a trivial exercise to increase the CPU & memory capability of the instance's underlying VM via the Cloud SQL PMR module.
+
+You can choose pre-configured database machine-type machine tiers
+
+Cloud SQL MSSQL min and max CPU and Memory per editions are described here
+
+CloudSQL Enterprise Edition Examples
+
+machine_type	cpu type	cpus	mem(GB)	Notes
+db-custom-1-3840	dedicated	1	3.75	Minimum Size for SQL Express
+db-custom-4-4096	dedicated	1	4	Minimum Size for SQL Standard Edition
+db-custom-16-65536	dedicated	16	64	Large Sized for SQL Standard/Enterprise Edition
+db-custom-96-638976	dedicated	96	624	Largest Sized instance
+Format : db-custom-numvCPUs-MemSizeMB
+
+numvCPUs must be either 1 or an even number between 2 and 96.
+
+MemSizeMB must be:
+
+0.9 to 6.5 GB per vCPU
+A multiple of 256 MB
+At least 3.75 GB (3840 MB)
+CloudSQL Enterprise Edition Plus Examples
+
+machine_type	cpu type	cpus	mem(GB)	Notes
+db-perf-optimized-N-2	dedicated	2	8	Smallest instance for Enterprise Plus
+db-perf-optimized-N-8	dedicated	8	64	Medium Sized instance
+db-perf-optimized-N-32	dedicated	32	256	Large Sized instance
+db-perf-optimized-N-128	dedicated	128	864	Largest Sized instance
+Format : db-perf-optimized-N-numvCPUs
+
+Cloud SQL PMR module attribute example:
+
+machine_type = "db-custom-4-16384" # for a medium size prod instance
+
+Reconfiguring the instance size is not an online operation and will require the instance to be shutdown and restarted on the new machine tier. Data however will not be lost.
+
+For CloudSQL Enterprise Plus there are additional parameters to configure available in version 3.0.5 onwards of the PMR module...
+
+edition = "ENTERPRISE_PLUS"
+machine_type = "db-perf-optimized-N-8"
+
+NB - an additional parameter "enable_data_cache" which enables the CloudSQL Enterprise Plus Data Cache has been disabled due to lack of CMEK availability
+
+module "myCloudSQLInstance" {
+
+source = "tfe.gcp.db.com/PMR/cloudsql/google"
+version = 3.0.0 
+machine_type    = "db-perf-optimized-N-2" # 2 cpu, 16GB RAM
+edition = "ENTERPRISE_PLUS"
+
+...more
+}
+
+The maximum storage size for all editions is 64 TB. Note SQL Express max single database size is 10GB so editions constraints shoud be considered with physical disk size of the host machine to avoid wastage.
+
+"Scale-out" for read operations IS possible by creating one or many "read-replicas". These read-replicas are asynchronously replicated and so may not have the latest commits from the Primary (see section on Disaster Recovery)
+
+Deployment/SDLC
+Cloud SQL MSSQL is available as a Native service. Deployment is possible through the normal Landing Zone SDLC process utilising the Terraform Cloud SQL PMR module within the CloudSQL plugin.
+
+Pre-requirements (assuming LZ onboarded, project created with vpc access)
+
+Landing Zone plugins to install
+
+Project (to enable cloudsql API & create service identity)
+KMS (to create encryption keys on cloud sql keyrings)
+Service Account (to create Cloud SQL application accounts)
+CloudSQL (to create Cloud SQL instances)
+IAM (to add roles to Service Accounts / Users / Groups)
+EPA (to allocate temporary elevated roles for Cloud SQL operation)
+Serverless VPC Connector (required in production to send security logs)
+Cloud Storage (required in production to send security logs)
+Additional Requirements for Production Environments
+
+Cloud Function created and SQL auditing setup as described here
+Recertification Tool installed for appropriate team members following this guide.
+Patching/Upgrade Strategy
+Patching
+
+See Cloud SQL maintenance
+Patching of both Cloud SQL MSSQL engine AND underlying o/s infrastructure is handled automatically as part of the managed service.
+By signing up to this service you accept that downtime each week will be provided via the "maintenance window" that you specify in the cloudsql plugin terraform code:
+
+Example to set maintenance window to 2am Sunday
+
+maintenance_window_day = 7 # 7 = Sunday
+maintenance_window_hour = 2 # 2 = 2am UTC
+
+Maintenance window is typically less than 1 minute for CloudSQL Enterprise Edition
+Maintenance window is typically less than 1 SECOND for CloudSQL Enterprise Edition Plus
+
+Upgrades
+
+Upgrade Major Version allows an in-place upgrade between major versions of MSSQL for example you can upgrade from SQL 2017 to SQL 2019.
+
+Monitoring/Logging
+As Cloud SQL MSSQL is a native GCP service the standard service Logging and Monitoring exists through Cloud Logging and Cloud Monitoring. See Cloud SQL Observability
+
+More details can be found on the Logging and Monitoring ADR
+
+Monitoring and Alerting can be configured on an instance by instance basis described here.
+
+Cloud Logging contains logs from various sources related to Cloud SQL activity
+
+Log	Description
+cloudsql.googleapis.com%2Fsqlserver.err	SQL Server Engine Log
+cloudsql.googleapis.com%2Fsqlagent.out	SQL Server Agent Log
+cloudaudit.googleapis.com%2Factivity	Cloud IAM events, Cloud SQL API events
+The logs described above are provided "out of the box" as part of the GCP cloud service. Data Access and Security related logs are only available in Cloud Logging when SQL Audit logs are transferred by a in-house produced Cloud Function described in the Logging and Monitoring section. Once setup these events can be viewed by using this query in Cloud Logging.
+
+protoPayload.methodName="sqlAudit.custom"
+
+Known bad configuration options
+Whilst not compulsory, usage of the CloudSQL PMR module means that most if not all cloudsql sercurity guardrails will be met (e.g not enabling public ip addresses). Because there is a set of Sentinel and Prisma policies in place, circumvention of the guardrails is not possible.
+
+Security
+IAM Security Control
+CSO security opinion on best practices for IAM for this service.
+Cloud SQL MSSQL uses a combination of IAM Authentication and Authorization and MSSQL native account Authentication and Authorization. This is because unlike Cloud SQL - Postgres MSSQL is not open source and not integrated with Google IAM. The complete process is as follows. An IAM user or service account is granted rights to the Cloud SQL - MSSQL instance service. This part is done using terraform IAM role request via an approved Github pull request. To login to the instance a corresponding SQL Native account must exist and granted appropriate schema access. The creation of the SQL Native account and it's rights is done manually outside of Github by the development team.
+
+Whilst this is a limitation as the only way to initally connect is via another native service or "Cloud SQL Auth Proxy"/Cloud SQL connectors having just a SQL Native account will not allow any access.
+
+Furthermore Google provides CloudSQL connectors (Python/Go/Java) and the "Cloud SQL Auth Proxy" which can broker connections to the CloudSQL instance providing both an SSL tunnel to encrypt the network connection but also a mechanism to refresh ephemeral certificates (OAUTH tokens) on an hourly basis.
+
+All client connections to Cloud SQL MSSQL should go through an authorized CloudSQL Proxy (or CloudSQL connector).
+
+To connect to CloudSQL databases the following minimal roles are required as a binding to the IAM (AD) user, service account or AD Group:
+
+roles/cloudsql.instanceUser
+roles/cloudsql.client
+Generally human interactive access to databases is restricted. The above roles can be provided via EPA plugin (UAT) and CyberArk (PRD).
+
+Further details can be found in the ADR : GCP Interactive Database Access . Note the CyberArk process for accessing Cloud SQL - MSSQL is currently in the design phase. When finalised ammendments will be made to this ADR.
+
+Network Security Control
+VPC Service Controls are available for Cloud SQL MSSQL
+Networks ensure each region has a dedicated CloudSQL subnet peered to standard shared VPC.
+
+Deployment Security Control
+Deployment security is provided by the standard build-time security posture management from Hashicorp Sentinel policy checks used to validate Terrform IaC plan stage within standard LZ SDLC processes.
+In addition, real-time monitoring of Cloud SQL resources versus security policy are reported by Prisma Cloud reporting to SIEM function.
+
+Secure Data Management and Encryption
+By default Disk encryption is under the MSSQL server : each data chunk is encrypted with the DEK (Google Managed Data Encryption Key). The DEK is encrypted with a KEK (Key encryption Key) With customer-managed encryption keys (CMEK), you create a key that wraps the Google KEK. Customer-managed encryption keys let you create, revoke, and delete the KEK. CMEKs are stored within a managed service called Cloud Key Management Service (Cloud KMS). The CMEK is therefore the KEK which is the key to the DEK.
+
+CloudSQL Data Encryption at Rest
+
+A CloudSQL keyring "gcp_cloud_sql" is created in each region by the DB Crypto Team. As long as each project has been properly onboarded the KMS terraform plugin can be used to create a cloud sql key for the region you require.
+
+If an application is Schrems-II compliant the on-prem External Key Manager (EKM) can also be used with Cloud SQL via the Cloud EKM service which makes the the key available through Cloud KMS.
+The diagram below shows 2 services (Big Query and cloud compute), Cloud SQL is now supported in the same way.
+
+CloudSQL using EKM
+
+Additionally for Schrems-II compliance, Cloud SQL MSSQL supports Assured Workloads which helps with enforcing, through policy, data residency requirements, encryption, KAJ and EKM.
+
+CloudSQL Enteprise Plus Data Cache
+
+**The current security posture of the Bank is that we CANNOT allow the usage of non-CMEK enabled devices for DB data and hence we CANNOT allow the usage of the data cache option within the Enterprise Plus option.
+This position will be kept under review if/when Google releases a version which includes CMEK enabled data cache devices. **
+
+Containers and Virtual Machine Security
+Not Applicable
+Logging and Monitoring
+CloudSQL is a native GCP service and as such benefits from the standard Logging, Monitoring and Alerting capabilities provided by GCP Cloud Logging.
+
+In order to send logs not included in the GCP service such as DDL and DML events required for security governance controls additional auditing must be configured on the instance and a in-house produced Cloud Function created to propogate events to Cloud Logging.
+
+Details of how to set create the Cloud Function and setup auditing are described here
+
+Once in Cloud Logging these events can be onboarded into Splunk for ingestion by SECMON teams.
+
+More details can be found on the Logging and Monitoring ADR
+
+Data Governance
+Data Governance and policies would be in accordance with DB policy, which may include, and not be limited to:
+
+Business division policies Data classification policies Data Retention Policies Domiciling constraints and other requirements Application teams must obtain exception approval from one or more of the CSO, DPO, and Product Management for Strictly confidential data.
+
+Cyber Hygiene
+Patching of MSSQL engine and underlying compute and networking infrastructure is part of the managed service offering from Google and is enabled by default. A weekly maintenance window is provided as part of the Cloud SQL instance instanstiation via the terraform PMR module.        
+
+Data Management and encryption are covered in above sections and are mandated
+
+Network encryption at all levels is mandated and described in other sections
+
+Usage of IAM for GCP user accounts means that regular recertification of users can be done at the AD level. Certification and Recertification of SQL Native Accounts must be performed via an in-house developed tactical solution. Details of how to install and use this are available here.
+
+A regular review of CloudSQL roles that have been granted through terraform code is recommended.
+
+As of May-25 Google CloudSQL supports the following versions:
+
+SQLServer 2022 CU14 (Enterprise, Standard, Express, Web)
+SQLServer 2019 CU28 (Enterprise, Standard, Express, Web)
+SQLServer 2017 CU31 (Enterprise, Standard, Express, Web)
+However, on-prem Tech Roadmap Compliance for SQLServer versions is as follows:
+
+Version	Regular support start date	Extended support start date	Deprecation date	DB TechDirect Product
+SQLServer 2022	28-Jun-24	11-Jan-28	11-Jan-33	PM053043
+SQLServer 2019	31-Jan-21	11-Jul-25	01-Aug-30	PM039174
+NB - no support on-prem for SQLServer 2017
+
+For latest version support dates from Google see CloudSQL Database Versions and Version Policies
+
+For Tech Roadmap Compliance of SQLServer on-prem see MS SQLServer Approved Versions
+
+General bank guidance in this respect is to make sure applications are using Major Version N (the latest) or Version N-1; this would mean that in May-25 for example applications should be using CloudSQL SQLServer 2022 or CloudSQL SQLServer 2019.
+Application teams should always aim to do a major upgrade once a year where appropriate and ensure that they have always upgraded ahead of the Extended support date when possible financial penalties may arise.
+
+Data Governance
+Data Governance and policies would be in accordance with DB policy, which may include, and not be limited to:
+
+Business division policies
+Data classification policies
+Data Retention Policies
+Domiciling constraints and other requirements
+Deployment
+Cloud SQL should be deployed using the PMR Module through the Cloud SQL Plugin Terraform available in Landing Zones as described earlier.
+
+Testing through the application should provide not only functional sign off but non-functionals, especially a performance capability test to ensure that the CPU/RAM combination is not only high enough to meet pre-set targets for performance (e.g. "UI screens return results < 1s with 100 concurrent users" or "end of day batch jobs complete in <1h" >) but not too high to be wasting money on unused CPU/Memory.
+
+Cost Optimisation
+Right-sizing instance machine type
+The most expensive part of CloudSQL is the allocation of CPU and memory resources. It is therefore imperative to ensure that costs are optimised by choosing the right-sized machine types that are big enough for the workloads.
+
+Ensure that DEV instances use smallest possible sizes for the SQL edition - e.g. "db-lightweight-1" for express edition
+Cloud SQL MSSQL comes in 3 editions.
+
+Enterprise - Full feature set, most expensive
+Standard - Partial feature set, some size limitiations, cheaper than Enterprise
+Express* - Limited feature set, many size limitations, cheapest option
+Only Enterprise and Standard should be used for production instances as security logging is not availabe in Express Edition.
+Application teams should carefully consider the requirements of their Cloud SQL - MSSQL instance and can refer to this guide to determine the appropriate edition SQL Edition Feature Comparison.
+
+Reference should also be made to the Google Cloud Pricing Calculator. Using this online tool cost comparisons can be made between different hardware, software editions and HA options and their approximate cost to use.
+
+Only choose Enterprise Plus option when absolutely required
+DEV instances should not use Enterprise Plus
+Only use Enterprise Plus where Performance demands it
+Only use Enterprise Plus where Uptime (99.99%) or other non-functionals demand it
+Choose HA/DR options wisely based on environment
+Adding an HA partner to your primary instance will double your costs. Adding a read-replica to that will treble your costs.
+
+DEV instances should NOT need an HA
+Avoid using read-replicas unless absolutely necessary
+Cloud SQL costs are charged on hourly usage - shutdown unused instances
+Can save significant amounts if only turning on Cloud SQL instances when needed. This is particularly relevant for DEV and UAT instances.
+Ensure correct logging parameters are set
+MSSQL audit options only need turning on in PRD (sometimes UAT).
+Look at Committed Usage Discounts
+Committing to 1 or 3 years can give savings of 40-50%
+TBD : how to do this !
+6. Technical Guardrails
+A set of guardrails are in place for Cloud SQL MSSQL : Security Guardrails for GCP services
+
+7. Lifecycle Status
+The Service can be used natively, with additional component services (mentioned under Component Services section) enabled to make production ready Cloud SQL - MSSQL instance.
